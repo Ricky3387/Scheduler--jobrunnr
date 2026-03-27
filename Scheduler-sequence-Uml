@@ -1,0 +1,95 @@
+@startuml
+title JobRunr Enterprise Scheduler (Colored + Numbered Flow)
+
+' 🎨 Colors
+skinparam backgroundColor #F9FAFB
+skinparam participant {
+BackgroundColor #E3F2FD
+BorderColor #1E88E5
+}
+skinparam database {
+BackgroundColor #FFF3E0
+BorderColor #FB8C00
+}
+skinparam actor {
+BackgroundColor #E8F5E9
+BorderColor #43A047
+}
+
+actor User
+
+participant "1️⃣ React UI" as UI #BBDEFB
+participant "2️⃣ API Service\n(Spring Boot)" as API #90CAF9
+participant "3️⃣ Job Scheduler\n(JobRunr)" as JS #64B5F6
+participant "4️⃣ Recurring Manager" as RJ #4FC3F7
+database "5️⃣ PostgreSQL\n(Job Tables)" as DB #FFE0B2
+participant "6️⃣ Worker Pod 1" as W1 #C8E6C9
+participant "7️⃣ Worker Pod 2" as W2 #A5D6A7
+participant "8️⃣ External Service" as EXT #D1C4E9
+participant "9️⃣ Kafka / DLQ" as KAFKA #FFCDD2
+
+== 🟢 JOB CREATION FLOW ==
+
+User -> UI : 1. Create Job
+UI -> API : 2. POST /jobs
+API -> JS : 3. enqueue(job)
+JS -> DB : 4. INSERT (ENQUEUED)
+DB --> JS : 5. OK
+JS --> API : 6. jobId
+API --> UI : 7. Success
+
+== 🔵 RECURRING JOB FLOW ==
+
+RJ -> DB : 8. Scan recurring jobs
+RJ -> DB : 9. Create job instance
+
+== 🟡 DISTRIBUTED POLLING ==
+
+loop Poll every few seconds
+W1 -> DB : 10. SELECT FOR UPDATE SKIP LOCKED
+DB --> W1 : 11. Job A
+
+W2 -> DB : 12. SELECT FOR UPDATE SKIP LOCKED
+DB --> W2 : 13. Job B
+
+end
+
+== 🟣 EXECUTION FLOW ==
+
+W1 -> DB : 14. Mark PROCESSING
+W1 -> EXT : 15. Execute Job
+
+alt ✅ Success
+EXT --> W1 : 16. Response OK
+W1 -> DB : 17. Mark SUCCEEDED
+else ❌ Failure
+EXT --> W1 : 18. Error
+W1 -> DB : 19. Mark FAILED + retry++
+
+alt 🔁 Retry Available
+    W1 -> DB : 20. Re-enqueue (delayed)
+else 💀 Max Retry Exceeded
+    W1 -> DB : 21. Mark DEAD
+    W1 -> KAFKA : 22. Send to DLQ
+end
+
+end
+
+== 🟠 HEARTBEAT ==
+
+loop every 15s
+W1 -> DB : 23. Heartbeat
+W2 -> DB : 24. Heartbeat
+end
+
+== 🔴 FAILURE RECOVERY ==
+
+note over DB
+25. Worker crash scenario:
+
+- लॉक released automatically
+- Job becomes visible again
+- Picked by another worker
+  end note
+
+@enduml
