@@ -1,0 +1,93 @@
+@startuml
+title Distributed Scheduler (Pub/Sub) - Numbered & Colored Flow
+
+' =======================
+' Styling
+' =======================
+skinparam sequence {
+    ArrowThickness 2
+    LifeLineBorderColor black
+    LifeLineBackgroundColor #f5f5f5
+    ParticipantBorderColor black
+    ParticipantBackgroundColor #e3f2fd
+    ActorBackgroundColor #fff3e0
+    BoxBackgroundColor #f0f0f0
+}
+
+actor User #FFE0B2
+participant "Scheduler API" as API #BBDEFB
+database "PostgreSQL DB" as DB #C8E6C9
+participant "Dispatcher\n(Scheduler Engine)" as Dispatcher #D1C4E9
+participant "Lock Service\n(Redis/DB)" as Lock #FFCDD2
+queue "Pub/Sub Broker\n(Kafka / PubSub)" as Broker #B2DFDB
+participant "Worker Service" as Worker #FFF9C4
+participant "Result Processor" as Result #DCEDC8
+participant "Retry Consumer" as Retry #F8BBD0
+participant "DLQ Consumer" as DLQ #CFD8DC
+
+' =======================
+' JOB CREATION
+' =======================
+== 🟢 1. Job Creation ==
+
+User -> API : (1) Create Job
+API -> DB : (2) Save job metadata
+
+' =======================
+' SCHEDULER TRIGGER
+' =======================
+== 🟡 2. Scheduler Trigger ==
+
+Dispatcher -> DB : (3) Fetch due jobs
+Dispatcher -> Lock : (4) Acquire lock (job_id)
+
+alt Lock Acquired
+    Lock --> Dispatcher : (5) Lock Granted
+    Dispatcher -> Broker : (6) Publish → job-execution
+else Lock Not Acquired
+    Lock --> Dispatcher : Skip execution
+end
+
+' =======================
+' JOB EXECUTION
+' =======================
+== 🔵 3. Job Execution ==
+
+Broker -> Worker : (7) Deliver job
+Worker -> Worker : (8) Execute logic
+
+alt Success
+    Worker -> Broker : (9) Publish SUCCESS
+else Failure
+    Worker -> Broker : (9) Publish FAILED
+end
+
+' =======================
+' RESULT PROCESSING
+' =======================
+== 🟣 4. Result Handling ==
+
+Broker -> Result : (10) Consume result
+Result -> DB : (11) Update status
+
+' =======================
+' RETRY FLOW
+' =======================
+== 🟠 5. Retry Logic ==
+
+alt Job Failed
+    Result -> Result : (12) Check retry policy
+
+    alt Retry Available
+        Result -> Broker : (13) Publish retry event
+        Broker -> Retry : (14) Consume retry
+        Retry -> DB : (15) Update next_run_time
+        Retry -> Broker : (16) Re-publish job
+    else Retries Exhausted
+        Result -> Broker : (17) Send to DLQ
+        Broker -> DLQ : (18) Consume DLQ
+        DLQ -> DB : (19) Mark FAILED permanently
+    end
+end
+
+@enduml
