@@ -1,0 +1,129 @@
+// ============================================= // PRODUCTION READY SPRING BOOT API CLIENT SETUP // Stack: Spring Boot 3.x, WebClient, HTTP Interface, Resilience4j // =============================================
+
+// 1. DEPENDENCIES (pom.xml) /* <dependencies> <dependency> <groupId>org.springframework.boot</groupId> <artifactId>spring-boot-starter-webflux</artifactId> </dependency>
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-aop</artifactId>
+</dependency>
+
+<dependency>
+    <groupId>io.github.resilience4j</groupId>
+    <artifactId>resilience4j-spring-boot3</artifactId>
+</dependency>
+
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-actuator</artifactId>
+</dependency>
+
+</dependencies>
+*/// ============================================= // 2. APPLICATION CONFIG (application.yml) // ============================================= /* spring: webclient: connection-timeout: 5000
+
+resilience4j: retry: instances: userService: max-attempts: 3 wait-duration: 2s
+
+circuitbreaker: instances: userService: sliding-window-size: 10 failure-rate-threshold: 50
+
+management: endpoints: web: exposure: include: health,info,metrics */
+
+// ============================================= // 3. WEBCLIENT CONFIG (Centralized) // ============================================= @Configuration public class WebClientConfig {
+
+@Bean
+public WebClient webClient(WebClient.Builder builder) {
+    return builder
+            .baseUrl("https://api.example.com")
+            .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+            .filter(logRequest())
+            .filter(logResponse())
+            .build();
+}
+
+private ExchangeFilterFunction logRequest() {
+    return ExchangeFilterFunction.ofRequestProcessor(clientRequest -> {
+        System.out.println("Request: " + clientRequest.method() + " " + clientRequest.url());
+        return Mono.just(clientRequest);
+    });
+}
+
+private ExchangeFilterFunction logResponse() {
+    return ExchangeFilterFunction.ofResponseProcessor(clientResponse -> {
+        System.out.println("Response Status: " + clientResponse.statusCode());
+        return Mono.just(clientResponse);
+    });
+}
+
+}
+
+// ============================================= // 4. HTTP INTERFACE CLIENT (Modern Approach) // ============================================= @HttpExchange("/users") public interface UserClient {
+
+@GetExchange
+List<User> getUsers();
+
+}
+
+// ============================================= // 5. CLIENT FACTORY CONFIG // ============================================= @Configuration public class ClientConfig {
+
+@Bean
+public UserClient userClient(WebClient webClient) {
+    HttpServiceProxyFactory factory =
+            HttpServiceProxyFactory.builder(WebClientAdapter.forClient(webClient)).build();
+
+    return factory.createClient(UserClient.class);
+}
+
+}
+
+// ============================================= // 6. SERVICE LAYER WITH RESILIENCE // ============================================= @Service public class UserService {
+
+private final UserClient userClient;
+
+public UserService(UserClient userClient) {
+    this.userClient = userClient;
+}
+
+@Retry(name = "userService")
+@CircuitBreaker(name = "userService", fallbackMethod = "fallback")
+public List<User> fetchUsers() {
+    return userClient.getUsers();
+}
+
+public List<User> fallback(Throwable t) {
+    return Collections.emptyList();
+}
+
+}
+
+// ============================================= // 7. CONTROLLER // ============================================= @RestController @RequestMapping("/api/users") public class UserController {
+
+private final UserService userService;
+
+public UserController(UserService userService) {
+    this.userService = userService;
+}
+
+@GetMapping
+public List<User> getUsers() {
+    return userService.fetchUsers();
+}
+
+}
+
+// ============================================= // 8. MODEL // ============================================= public class User { private Long id; private String name;
+
+// getters & setters
+
+}
+
+// ============================================= // 9. GLOBAL ERROR HANDLING // ============================================= @RestControllerAdvice public class GlobalExceptionHandler {
+
+@ExceptionHandler(Exception.class)
+public ResponseEntity<String> handleException(Exception ex) {
+    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body("Error: " + ex.getMessage());
+}
+
+}
+
+// ============================================= // 10. PRODUCTION ENHANCEMENTS (IMPORTANT) // ============================================= /* ✔ Add OAuth2 Interceptor (for secured APIs) ✔ Add Distributed Tracing (OpenTelemetry) ✔ Use proper logging (SLF4J instead of System.out) ✔ Externalize configs (Config Server / Vault) ✔ Add Timeouts at HTTP level ✔ Use connection pooling (Reactor Netty config) ✔ Add metrics to Prometheus/Grafana */
+
+// ============================================= // END // =============================================
